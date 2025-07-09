@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pdfplumber
 import pandas as pd
@@ -101,6 +102,7 @@ if 'df_out' in st.session_state:
     df = st.session_state.df_out
     st.subheader("Extracted Transactions")
     st.dataframe(df)
+
     # Download text file
     header = "Form 8949\nDepartment of the Treasury...\n"
     combined = header + df.to_csv(index=False)
@@ -111,6 +113,7 @@ if 'df_out' in st.session_state:
         mime="text/plain",
         key="download_txt"
     )
+
     # Download CSV file
     df_csv = df[[
         'Description','Date Acquired','Date Sold',
@@ -126,4 +129,4 @@ if 'df_out' in st.session_state:
     )
 else:
     st.info("Upload a PDF and click ‘Process PDF’ to extract transactions.")
-
+```

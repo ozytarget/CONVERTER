@@ -4,59 +4,39 @@ import pandas as pd
 import re
 from io import BytesIO
 
-# Configure page
-st.set_page_config(page_title="1099-B to 8949 Converter", layout="wide")
-st.title("📄 1099-B to IRS Form 8949 Converter")
+# Configuración de la página
+st.set_page_config(page_title="PDF to Form 8949 (Unlimited)", layout="wide")
+st.title("📄 Convertidor PDF 1099-B → Formulario IRS 8949 (Páginas ilimitadas)")
+st.markdown("Sube tu PDF de transacciones y convierte todo automáticamente al Formulario 8949.")
 
-st.markdown("Extrae transacciones de PDF 1099-B y genera Formulario 8949 con descarga de TXT y CSV.")
-
-# Blank template download
+# Plantilla vacía descargable
 blank = pd.DataFrame(columns=[
     'Description','Date Acquired','Date Sold',
     'Proceeds','Cost Basis','Code','Adjustment Amount','Gain or (loss)'
 ])
 csv_blank = blank.to_csv(index=False).encode('utf-8')
 st.download_button(
-    "Download Blank Form 8949 Template CSV",
+    "Descargar Plantilla CSV Vacía (8949)",
     data=csv_blank,
     file_name="form_8949_template.csv",
-    mime="text/csv",
-    key="download_blank"
+    mime="text/csv"
 )
 
-# File uploader and pages input
-uploaded_file = st.file_uploader("Upload 1099-B PDF", type=["pdf"], key="uploader")
-pages_input = st.text_input("Pages (e.g. 1,2-3). Leave blank = all.", key="pages_input")
+# Subida de archivo PDF
+uploaded_file = st.file_uploader("📤 Subir PDF 1099-B", type=["pdf"])
 
-# Regex patterns
+# Regex para descripción y líneas de transacción
 desc_re = re.compile(r"^([A-Z]+ .*CALL .*|[A-Z]+ .*PUT .*)$")
 data_re = re.compile(
     r"^(\d{2}/\d{2}/\d{2})\s+([\d\.]+)\s+(-?[\d\.]+)\s+(\d{2}/\d{2}/\d{2})\s+(-?[\d\.]+).*?\.\.\.\s+(-?[\d\.]+)"
 )
 
-# Parse pages
-@st.cache_data
-def parse_pages(text: str):
-    if not text:
-        return None
-    parts = [p.strip() for p in text.split(',')]
-    pages = []
-    for part in parts:
-        if '-' in part:
-            a, b = part.split('-')
-            pages.extend(range(int(a), int(b) + 1))
-        else:
-            pages.append(int(part))
-    return sorted(set(pages))
-
-# Process button triggers extraction once
-def extract_records(pdf_bytes, pages):
+# Función para extraer las transacciones de TODO el PDF
+def extract_all_records(pdf_bytes):
     records = []
     last_desc = ''
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for idx, page in enumerate(pdf.pages, start=1):
-            if pages and idx not in pages:
-                continue
             text = page.extract_text() or ''
             for line in text.splitlines():
                 line = line.strip()
@@ -79,52 +59,37 @@ def extract_records(pdf_bytes, pages):
                     last_desc = ''
     return records
 
-# When Process button clicked
-def process_action():
-    pdf_bytes = st.session_state.uploader.read()
-    pages = parse_pages(st.session_state.pages_input)
-    records = extract_records(pdf_bytes, pages)
-    if not records:
-        st.error("No transactions detected.")
-        return
-    df = pd.DataFrame(records)
-    df['Date Acquired'] = pd.to_datetime(df['Date Acquired'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df['Date Sold'] = pd.to_datetime(df['Date Sold'], errors='coerce').dt.strftime('%Y-%m-%d')
-    df['Gain or (loss)'] = df['Gain or (loss)'].astype(float)
-    st.session_state['df_out'] = df
-
+# Acción al presionar botón
 if uploaded_file:
-    st.button("Process PDF", on_click=process_action, key="process_btn")
+    pdf_bytes = uploaded_file.read()
+    with st.spinner("Procesando todo el PDF..."):
+        records = extract_all_records(pdf_bytes)
+        if not records:
+            st.error("⚠️ No se detectaron transacciones en el PDF.")
+        else:
+            df = pd.DataFrame(records)
+            df['Date Acquired'] = pd.to_datetime(df['Date Acquired'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df['Date Sold'] = pd.to_datetime(df['Date Sold'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df['Gain or (loss)'] = df['Gain or (loss)'].astype(float)
 
-# Display results and download
-if 'df_out' in st.session_state:
-    df = st.session_state.df_out
-    st.subheader("Extracted Transactions")
-    st.dataframe(df)
+            st.success(f"✅ {len(df)} transacciones extraídas de {len(pdfplumber.open(BytesIO(pdf_bytes)).pages)} páginas.")
+            st.dataframe(df)
 
-    # Download text file
-    header = "Form 8949\nDepartment of the Treasury...\n"
-    combined = header + df.to_csv(index=False)
-    st.download_button(
-        "Download Form 8949 Text File",
-        data=combined.encode('utf-8'),
-        file_name="form_8949.txt",
-        mime="text/plain",
-        key="download_txt"
-    )
+            # Texto plano IRS
+            txt_header = "Form 8949 - Department of the Treasury - Internal Revenue Service\n"
+            txt_content = txt_header + df.to_csv(index=False)
+            st.download_button(
+                "📥 Descargar .TXT para IRS",
+                data=txt_content.encode('utf-8'),
+                file_name="form_8949.txt",
+                mime="text/plain"
+            )
 
-    # Download CSV file
-    df_csv = df[[
-        'Description','Date Acquired','Date Sold',
-        'Proceeds','Cost Basis','Code','Adjustment Amount','Gain or (loss)'
-    ]]
-    csv_out = df_csv.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "Download Form 8949 CSV",
-        data=csv_out,
-        file_name="form_8949.csv",
-        mime="text/csv",
-        key="download_csv"
-    )
-else:
-    st.info("Upload a PDF and click ‘Process PDF’ to extract transactions.")
+            # CSV para importar/guardar
+            csv_output = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Descargar CSV 8949",
+                data=csv_output,
+                file_name="form_8949.csv",
+                mime="text/csv"
+            )

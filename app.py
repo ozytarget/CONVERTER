@@ -5,7 +5,7 @@ import re
 from io import BytesIO
 
 # Configure page
-st.set_page_config(page_title="1099-B to 8949 Converter", layout="wide")
+st.set_page_config(page_title="1099-B to 8949 Converter for PRO-TAX", layout="wide")
 st.title("📄 1099-B to IRS Form 8949 Converter")
 
 st.markdown("Extrae transacciones de PDF 1099-B y genera Formulario 8949 con descarga de TXT y CSV.")

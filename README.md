@@ -1,11 +1,20 @@
 # 1099-B to IRS Form 8949 Converter
 
-Este proyecto es una aplicación Streamlit que, dado un PDF de 1099-B, extrae las transacciones y genera:
-- Un CSV con las columnas (a)–(h) listo para Formulario 8949.
-- Un archivo de texto con el encabezado del Formulario 8949 y tus transacciones.
+Este proyecto es una aplicación **Streamlit** que extrae transacciones de un PDF de 1099-B y genera:
 
-## Uso
+1. Un **CSV** con las columnas (a)–(h) listo para importar en el Formulario 8949.  
+2. Un **archivo de texto** (`.txt`) con el encabezado completo del Formulario 8949 y tus transacciones.
 
-1. Instala dependencias:
+---
+
+## Cómo usarlo (local, paso a paso)
+
+1. **Clona o descarga** este repositorio (puedes descargar el ZIP desde GitHub o, si más adelante usas Git, `git clone ...`).  
+2. Abre una **consola** o **PowerShell** dentro de la carpeta donde guardaste estos archivos.  
+3. Crea y activa un **entorno virtual** (recomendado):
    ```bash
-   pip install -r requirements.txt
+   python -m venv venv
+   # Windows
+   venv\Scripts\activate
+   # macOS/Linux
+   source venv/bin/activate

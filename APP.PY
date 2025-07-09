@@ -126,3 +126,4 @@ if 'df_out' in st.session_state:
     )
 else:
     st.info("Upload a PDF and click ‘Process PDF’ to extract transactions.")
+

@@ -18,10 +18,18 @@ try:
         file_bytes = f.read()
     
     file_data = BytesIO(file_bytes)
-    df = UniversalBrokerParser.parse(file_data, "RH2021 EXPORT ECXEL.csv")
+    result = UniversalBrokerParser.parse(file_data, "RH2021 EXPORT ECXEL.csv")
+    
+    # Unpack the tuple (df, warnings)
+    df, warnings = result
     
     print(f"\n✅ Archivo parseado exitosamente")
     print(f"Total de transacciones: {len(df)}")
+    
+    if warnings:
+        print(f"\n⚠️ Advertencias encontradas:")
+        for warning in warnings:
+            print(f"  - {warning}")
     print(f"\nColumnas detectadas: {list(df.columns)}")
     
     print("\n" + "=" * 80)

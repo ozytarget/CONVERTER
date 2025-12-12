@@ -83,6 +83,41 @@ class UniversalBrokerParser:
         return None
     
     @staticmethod
+    def auto_fix_corrupted_row(row: pd.Series) -> pd.Series:
+        """
+        Intenta auto-corregir una fila con datos corruptos
+        """
+        try:
+            # Si Cost Basis es sospechosamente bajo (< 5) y Proceeds es alto
+            proceeds = float(row.get('Proceeds', 0)) if pd.notna(row.get('Proceeds')) else 0
+            cost_basis = float(row.get('Cost Basis', 0)) if pd.notna(row.get('Cost Basis')) else 0
+            gain_loss = float(row.get('Gain or (loss)', 0)) if pd.notna(row.get('Gain or (loss)')) else 0
+            
+            # Caso 1: Cost Basis corrupto (muy bajo mientras Proceeds es alto)
+            if 0 < cost_basis < 5 and abs(proceeds) > 50:
+                # Intentar recuperar Cost Basis del Gain/Loss
+                calculated_cost = proceeds - gain_loss
+                if calculated_cost > 0:
+                    row['Cost Basis'] = calculated_cost
+                    row['Gain or (loss)'] = proceeds - calculated_cost
+            
+            # Caso 2: Proceeds negativo con Cost Basis cero (opción expirada)
+            elif proceeds < 0 and cost_basis == 0:
+                # El Proceeds negativo es en realidad la pérdida
+                row['Cost Basis'] = abs(proceeds)
+                row['Proceeds'] = 0
+                row['Gain or (loss)'] = -abs(proceeds)
+            
+            # Caso 3: Recalcular Gain/Loss si no coincide
+            elif abs(gain_loss - (proceeds - cost_basis)) > 0.01:
+                row['Gain or (loss)'] = proceeds - cost_basis
+        
+        except:
+            pass  # Si hay error, dejar la fila como está
+        
+        return row
+    
+    @staticmethod
     def detect_and_map_columns(df: pd.DataFrame) -> Dict[str, str]:
         """
         Detecta automáticamente las columnas y crea un mapeo a formato estándar
@@ -250,6 +285,9 @@ class UniversalBrokerParser:
             else:
                 # Si la columna ya existe, asegurarse de que está limpia
                 df['Gain or (loss)'] = df['Gain or (loss)'].apply(UniversalBrokerParser.clean_numeric_value)
+            
+            # AUTO-CORREGIR FILAS CON DATOS CORRUPTOS
+            df = df.apply(UniversalBrokerParser.auto_fix_corrupted_row, axis=1)
             
             # Asegurar columnas mínimas
             required_cols = ['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']

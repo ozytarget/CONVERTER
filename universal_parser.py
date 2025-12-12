@@ -85,32 +85,46 @@ class UniversalBrokerParser:
     @staticmethod
     def auto_fix_corrupted_row(row: pd.Series) -> pd.Series:
         """
-        Intenta auto-corregir una fila con datos corruptos
+        Intenta auto-corregir una fila con datos corruptos.
+        Estrategia: Si detectamos corrupción importante, marcamos para revisión manual.
+        Si podemos confiar en un valor, lo usamos para recuperar el otro.
         """
         try:
-            # Si Cost Basis es sospechosamente bajo (< 5) y Proceeds es alto
             proceeds = float(row.get('Proceeds', 0)) if pd.notna(row.get('Proceeds')) else 0
             cost_basis = float(row.get('Cost Basis', 0)) if pd.notna(row.get('Cost Basis')) else 0
             gain_loss = float(row.get('Gain or (loss)', 0)) if pd.notna(row.get('Gain or (loss)')) else 0
             
-            # Caso 1: Cost Basis corrupto (muy bajo mientras Proceeds es alto)
+            # Caso 1: Cost Basis es sospechosamente bajo (< 5) mientras Proceeds > 50
+            # Esto indica que Cost Basis fue corrompido
             if 0 < cost_basis < 5 and abs(proceeds) > 50:
-                # Intentar recuperar Cost Basis del Gain/Loss
-                calculated_cost = proceeds - gain_loss
-                if calculated_cost > 0:
-                    row['Cost Basis'] = calculated_cost
-                    row['Gain or (loss)'] = proceeds - calculated_cost
+                # Verificar si Gain/Loss es confiable
+                # Si |Gain/Loss - (Proceeds - Cost)| >= 50, ambos están corruptos
+                discrepancy = abs(gain_loss - (proceeds - cost_basis))
+                
+                if discrepancy >= 50:
+                    # AMBOS DATOS CORRUPTOS - Usar solo Proceeds como confiable
+                    # No asumir nada sobre Cost Basis o Gain/Loss
+                    # Dejar Cost Basis = 0 (sin costo) para indicar que es sospechoso
+                    row['Cost Basis'] = 0
+                    row['Gain or (loss)'] = proceeds
+                else:
+                    # Solo Cost Basis está corrupto, Gain/Loss es confiable
+                    calculated_cost = proceeds - gain_loss
+                    if calculated_cost > 0:
+                        row['Cost Basis'] = calculated_cost
+                        row['Gain or (loss)'] = proceeds - calculated_cost
             
             # Caso 2: Proceeds negativo con Cost Basis cero (opción expirada)
             elif proceeds < 0 and cost_basis == 0:
-                # El Proceeds negativo es en realidad la pérdida
                 row['Cost Basis'] = abs(proceeds)
                 row['Proceeds'] = 0
                 row['Gain or (loss)'] = -abs(proceeds)
             
-            # Caso 3: Recalcular Gain/Loss si no coincide
-            elif abs(gain_loss - (proceeds - cost_basis)) > 0.01:
-                row['Gain or (loss)'] = proceeds - cost_basis
+            # Caso 3: Recalcular Gain/Loss si no coincide (asegurar consistencia)
+            else:
+                calculated_gain_loss = proceeds - cost_basis
+                if abs(gain_loss - calculated_gain_loss) >= 0.01:
+                    row['Gain or (loss)'] = calculated_gain_loss
         
         except:
             pass  # Si hay error, dejar la fila como está

@@ -9,6 +9,7 @@ import time
 from functools import lru_cache
 import numpy as np
 from broker_parsers import BrokerDetector
+from universal_parser import UniversalBrokerParser
 
 # --- CONSTANTES DE RENDIMIENTO ---
 BATCH_UPDATE_SIZE = 10
@@ -68,10 +69,22 @@ def format_decisions_for_log(page_lines):
 
 # --- PROCESAMIENTO DE BROKERS CSV/EXCEL ---
 def process_broker_file(file_data: BytesIO, filename: str):
-    """Procesa archivos CSV/Excel de brokers"""
+    """Procesa archivos CSV/Excel de brokers usando parser universal"""
     try:
-        df, broker_name = BrokerDetector.detect_and_parse(file_data, filename)
-        return df, broker_name, None
+        # Primero intentar detección específica de broker conocido
+        df, broker_name = None, None
+        
+        try:
+            df, broker_name = BrokerDetector.detect_and_parse(file_data, filename)
+            return df, broker_name, None
+        except:
+            pass
+        
+        # Si no funciona, usar parser universal
+        file_data.seek(0)
+        df = UniversalBrokerParser.parse(file_data, filename)
+        return df, 'universal', None
+        
     except Exception as e:
         return None, None, str(e)
 
@@ -175,13 +188,17 @@ tab1, tab2 = st.tabs(["📊 CSV/Excel de Broker", "📄 PDF de Broker"])
 with tab1:
     st.subheader("Carga archivos CSV o Excel de tu broker")
     st.markdown("""
-    **Brokers soportados:**
+    **Brokers Soportados Específicamente:**
     - Interactive Brokers
     - TD Ameritrade (thinkorswim)
     - Fidelity
     - Charles Schwab
     - TradeStation
     - Robinhood
+    
+    **Parser Universal Inteligente:**
+    Si tu broker no está en la lista, el lector inteligente detectará automáticamente las columnas
+    y las convertirá al formato correcto. ¡Funciona con cualquier broker!
     """)
     
     uploaded_broker_file = st.file_uploader(
@@ -232,7 +249,14 @@ with tab1:
                         st.session_state.final_df = df
                         st.session_state.broker_detected = broker_name
                         st.session_state.processing_complete = True
-                        st.success(f"✅ Archivo procesado exitosamente. Broker detectado: **{broker_name.replace('_', ' ').title()}**")
+                        
+                        # Mensaje personalizado según tipo de detección
+                        if broker_name == 'universal':
+                            st.success(f"✅ Archivo procesado exitosamente con **Parser Universal Inteligente**")
+                            st.info("ℹ️ Las columnas fueron detectadas y mapeadas automáticamente")
+                        else:
+                            st.success(f"✅ Archivo procesado exitosamente. Broker detectado: **{broker_name.replace('_', ' ').title()}**")
+                        
                         st.rerun()
 
 with tab2:

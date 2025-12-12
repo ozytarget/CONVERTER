@@ -8,6 +8,7 @@ from pdf2image import convert_from_bytes
 import time
 from functools import lru_cache
 import numpy as np
+from broker_parsers import BrokerDetector
 
 # --- CONSTANTES DE RENDIMIENTO ---
 BATCH_UPDATE_SIZE = 10
@@ -20,10 +21,12 @@ st.title("📄 PDF CONVERTER PRO-TAX")
 # --- INICIALIZACIÓN, REGEX Y FUNCIONES ---
 if 'processing_complete' not in st.session_state: st.session_state.processing_complete = False
 if 'analysis_in_progress' not in st.session_state: st.session_state.analysis_in_progress = False
-if 'pdf_info' not in st.session_state: st.session_state.pdf_info = None
+if 'file_info' not in st.session_state: st.session_state.file_info = None
 if 'final_df' not in st.session_state: st.session_state.final_df = pd.DataFrame()
 if 'raw_lines_df' not in st.session_state: st.session_state.raw_lines_df = pd.DataFrame()
 if 'audit_log_df' not in st.session_state: st.session_state.audit_log_df = pd.DataFrame()
+if 'file_type' not in st.session_state: st.session_state.file_type = None
+if 'broker_detected' not in st.session_state: st.session_state.broker_detected = None
 
 # Compilar regex una sola vez (global)
 DESC_RE = re.compile(r"/ CUSIP: / Symbol:", re.IGNORECASE)
@@ -63,6 +66,16 @@ def format_decisions_for_log(page_lines):
     if not page_lines: return "No se encontraron coincidencias."
     return "\n".join([f"{line['type']}: {line['content']}" for line in page_lines])
 
+# --- PROCESAMIENTO DE BROKERS CSV/EXCEL ---
+def process_broker_file(file_data: BytesIO, filename: str):
+    """Procesa archivos CSV/Excel de brokers"""
+    try:
+        df, broker_name = BrokerDetector.detect_and_parse(file_data, filename)
+        return df, broker_name, None
+    except Exception as e:
+        return None, None, str(e)
+
+# --- PROCESAMIENTO DE PDFs ---
 @st.cache_data(show_spinner=False)
 def process_single_page_v43(_pdf_bytes, page_number, force_ocr):
     """Optimizado para mejor eficiencia de memoria y velocidad"""
@@ -132,121 +145,244 @@ def assemble_records(lines_df):
     
     return pd.DataFrame(final_records)
 
+# Función para generar salida estándar 8949
+def generate_8949_output(df):
+    """Genera DataFrame con columnas de Formulario 8949"""
+    if df.empty:
+        return pd.DataFrame()
+    
+    df_8949 = df[['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']].copy()
+    df_8949.insert(5, '(1f) Code(s) from instructions', '')
+    df_8949.insert(6, '(1g) Amount of adjustment', '')
+    return df_8949
+
 # --- LÓGICA PRINCIPAL DE LA APLICACIÓN ---
-st.header("1. Cargar Archivo")
-uploaded_file = st.file_uploader("Sube tu PDF para comenzar", type=["pdf"], key="main_uploader")
+st.header("1️⃣ Cargar Archivo")
 
-if uploaded_file:
-    if not st.session_state.pdf_info or uploaded_file.file_id != st.session_state.pdf_info['id']:
-        st.session_state.pdf_info = {'name': uploaded_file.name, 'bytes': uploaded_file.getvalue(), 'id': uploaded_file.file_id}
-        st.session_state.processing_complete = False
-        st.session_state.analysis_in_progress = False
-        st.session_state.raw_lines_df, st.session_state.final_df, st.session_state.audit_log_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-        st.cache_data.clear()
-        st.rerun()
+# Pestañas para diferentes tipos de entrada
+tab1, tab2 = st.tabs(["📊 CSV/Excel de Broker", "📄 PDF de Broker"])
 
-if st.session_state.pdf_info:
-    st.success(f"Archivo cargado: **{st.session_state.pdf_info['name']}**")
-    st.markdown("---")
+with tab1:
+    st.subheader("Carga archivos CSV o Excel de tu broker")
+    st.markdown("""
+    **Brokers soportados:**
+    - Interactive Brokers
+    - TD Ameritrade (thinkorswim)
+    - Fidelity
+    - Charles Schwab
+    - TradeStation
+    """)
     
-    st.header("2. Iniciar Análisis")
-    force_ocr_checkbox = st.checkbox("Forzar escaneo profundo (OCR) en todas las páginas", help="Útil para PDFs escaneados. Es mucho más lento.")
+    uploaded_broker_file = st.file_uploader(
+        "Sube tu archivo CSV o Excel",
+        type=["csv", "xlsx", "xls"],
+        key="broker_uploader"
+    )
     
-    if st.button("🚀 Iniciar Análisis Completo", type="primary"):
-        st.session_state.processing_complete = False
-        st.session_state.analysis_in_progress = True
-        st.rerun() # Forzamos un rerun para que el expander se abra antes de empezar el bucle largo
+    if uploaded_broker_file:
+        if not st.session_state.file_info or uploaded_broker_file.file_id != st.session_state.file_info.get('id'):
+            file_bytes = uploaded_broker_file.getvalue()
+            file_info = {
+                'name': uploaded_broker_file.name,
+                'bytes': file_bytes,
+                'id': uploaded_broker_file.file_id,
+                'type': 'broker'
+            }
+            st.session_state.file_info = file_info
+            st.session_state.processing_complete = False
+            st.session_state.final_df = pd.DataFrame()
+            st.session_state.file_type = 'broker'
+            st.rerun()
+        
+        if st.session_state.file_info and st.session_state.file_info.get('type') == 'broker':
+            st.success(f"✅ Archivo cargado: **{st.session_state.file_info['name']}**")
+            
+            if st.button("🚀 Procesar Broker File", type="primary", key="process_broker"):
+                st.session_state.processing_complete = False
+                file_bytes = st.session_state.file_info['bytes']
+                filename = st.session_state.file_info['name']
+                
+                with st.spinner("Procesando archivo..."):
+                    file_data = BytesIO(file_bytes)
+                    df, broker_name, error = process_broker_file(file_data, filename)
+                    
+                    if error:
+                        st.error(f"❌ Error procesando archivo: {error}")
+                    else:
+                        st.session_state.final_df = df
+                        st.session_state.broker_detected = broker_name
+                        st.session_state.processing_complete = True
+                        st.success(f"✅ Archivo procesado exitosamente. Broker detectado: **{broker_name.replace('_', ' ').title()}**")
+                        st.rerun()
 
-    # Este bloque solo se ejecuta si el análisis ha sido iniciado
-    if st.session_state.analysis_in_progress and not st.session_state.processing_complete:
-        pdf_bytes = st.session_state.pdf_info['bytes']
-        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf: total_pages = len(pdf.pages)
-        st.info(f"Iniciando análisis para **{st.session_state.pdf_info['name']}** ({total_pages} páginas)...")
-        progress_bar, status_placeholder = st.progress(0), st.empty()
+with tab2:
+    st.subheader("Carga un PDF de tu broker (Formato 1099-B)")
+    
+    uploaded_pdf = st.file_uploader(
+        "Sube tu PDF",
+        type=["pdf"],
+        key="pdf_uploader"
+    )
+    
+    if uploaded_pdf:
+        if not st.session_state.file_info or uploaded_pdf.file_id != st.session_state.file_info.get('id'):
+            st.session_state.file_info = {
+                'name': uploaded_pdf.name,
+                'bytes': uploaded_pdf.getvalue(),
+                'id': uploaded_pdf.file_id,
+                'type': 'pdf'
+            }
+            st.session_state.processing_complete = False
+            st.session_state.file_type = 'pdf'
+            st.rerun()
         
-        # El expander ahora se abre dinámicamente
-        with st.expander("🔬 Monitor", expanded=st.session_state.analysis_in_progress):
-            log_placeholder = st.empty()
-            log_placeholder.info("El escaneo en vivo aparecerá aquí...")
-        
-        all_potential_lines, audit_log = [], []
-        start_time = time.time()
-        
-        for i in range(total_pages):
-            current_page_num = i + 1
-            page_lines, ocr_used, raw_text = process_single_page_v43(pdf_bytes, current_page_num, force_ocr_checkbox)
-            all_potential_lines.extend(page_lines)
-            audit_log.append({'Page_Number': current_page_num, 'OCR_Used': ocr_used, 'Extracted_Text': raw_text, 'Scanner_Decisions': format_decisions_for_log(page_lines)})
+        if st.session_state.file_info and st.session_state.file_info.get('type') == 'pdf':
+            st.success(f"✅ Archivo cargado: **{st.session_state.file_info['name']}**")
+            st.markdown("---")
             
-            if current_page_num % BATCH_UPDATE_SIZE == 0 or current_page_num == total_pages:
-                progress_percentage = current_page_num / total_pages; progress_bar.progress(progress_percentage)
-                elapsed_time = time.time() - start_time; eta = (elapsed_time / current_page_num) * (total_pages - current_page_num)
-                status_placeholder.markdown(f'<div style="padding: 10px; border-radius: 5px; background-color: #262730;"><b>Estado:</b> Procesando...<br><b>Páginas:</b> {current_page_num} / {total_pages} | <b>ETA:</b> {format_time(eta)}</div>', unsafe_allow_html=True)
+            st.header("2️⃣ Configurar Análisis")
+            force_ocr_checkbox = st.checkbox(
+                "Forzar OCR en todas las páginas",
+                help="Útil para PDFs escaneados. Es más lento pero más preciso."
+            )
             
-            with log_placeholder.container():
-                st.subheader(f"Página {current_page_num} de {total_pages}")
-                if ocr_used: st.warning(f"  - Se utilizó OCR en esta página.")
-                st.markdown("**Texto Crudo Extraído:**"); st.code(raw_text, language='text')
-                st.markdown("**Decisiones del Escáner:**")
-                if not page_lines: st.write("  - No se encontraron coincidencias.")
-                for line in page_lines: st.success(f"  - **{line['type']}**: `{line['content']}`")
-        
-        status_placeholder.empty(); progress_bar.empty()
-        log_placeholder.success("✅ Escaneo en vivo completado. Revisa el Log de Auditoría descargable para un resumen completo.")
-        
-        st.session_state.audit_log_df = pd.DataFrame(audit_log)
-        st.session_state.raw_lines_df = pd.DataFrame(all_potential_lines)
-        st.session_state.final_df = assemble_records(st.session_state.raw_lines_df)
-        st.session_state.analysis_in_progress = False # Terminamos el análisis
-        st.session_state.processing_complete = True
-        st.rerun()
+            if st.button("🚀 Iniciar Análisis", type="primary", key="start_pdf_analysis"):
+                st.session_state.processing_complete = False
+                st.session_state.analysis_in_progress = True
+                st.rerun()
+            
+            if st.session_state.analysis_in_progress and not st.session_state.processing_complete:
+                pdf_bytes = st.session_state.file_info['bytes']
+                
+                with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+                    total_pages = len(pdf.pages)
+                
+                st.info(f"Analizando **{st.session_state.file_info['name']}** ({total_pages} páginas)...")
+                progress_bar = st.progress(0)
+                status_placeholder = st.empty()
+                
+                with st.expander("🔬 Detalles del Procesamiento", expanded=True):
+                    log_placeholder = st.empty()
+                
+                all_potential_lines = []
+                audit_log = []
+                start_time = time.time()
+                
+                for i in range(total_pages):
+                    current_page_num = i + 1
+                    page_lines, ocr_used, raw_text = process_single_page_v43(
+                        pdf_bytes, current_page_num, force_ocr_checkbox
+                    )
+                    all_potential_lines.extend(page_lines)
+                    audit_log.append({
+                        'Page': current_page_num,
+                        'OCR_Used': ocr_used,
+                        'Matches': len(page_lines),
+                        'Summary': format_decisions_for_log(page_lines)
+                    })
+                    
+                    if current_page_num % BATCH_UPDATE_SIZE == 0 or current_page_num == total_pages:
+                        progress_pct = current_page_num / total_pages
+                        progress_bar.progress(progress_pct)
+                        elapsed = time.time() - start_time
+                        eta = (elapsed / current_page_num) * (total_pages - current_page_num)
+                        status_placeholder.info(
+                            f"📊 Páginas: {current_page_num}/{total_pages} | ⏱️ ETA: {format_time(eta)}"
+                        )
+                
+                progress_bar.empty()
+                status_placeholder.empty()
+                
+                with log_placeholder.container():
+                    st.success("✅ Escaneo completado")
+                
+                st.session_state.audit_log_df = pd.DataFrame(audit_log)
+                st.session_state.raw_lines_df = pd.DataFrame(all_potential_lines)
+                st.session_state.final_df = assemble_records(st.session_state.raw_lines_df)
+                st.session_state.analysis_in_progress = False
+                st.session_state.processing_complete = True
+                st.rerun()
 
 # --- SECCIÓN 3: RESULTADOS Y DESCARGAS ---
-if st.session_state.processing_complete:
+if st.session_state.processing_complete and not st.session_state.final_df.empty:
     st.markdown("---")
-    st.header("3. Resultados y Descargas")
-    df = st.session_state.final_df
-    base_filename = st.session_state.pdf_info['name'].rsplit('.', 1)[0]
+    st.header("3️⃣ Resultados y Descargas")
     
-    if not df.empty:
-        # Cálculo vectorizado eficiente
+    df = st.session_state.final_df
+    base_filename = st.session_state.file_info['name'].rsplit('.', 1)[0]
+    
+    # Estadísticas
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Transacciones", len(df))
+    with col2:
         total_gain_loss = df['Gain or (loss)'].sum()
-        st.success(f"¡Proceso exitoso! Se ensamblaron **{len(df)}** transacciones.")
-        st.metric(label="Ganancia / (Pérdida) Neta Total", value=f"${total_gain_loss:,.2f}")
-        st.dataframe(df)
+        st.metric("Ganancia/(Pérdida) Total", f"${total_gain_loss:,.2f}")
+    with col3:
+        total_proceeds = df['Proceeds'].sum()
+        st.metric("Ingresos Totales", f"${total_proceeds:,.2f}")
+    
+    # Tabla de transacciones
+    st.subheader("📋 Transacciones Extraídas")
+    st.dataframe(df, use_container_width=True)
+    
+    # Descargas
+    st.subheader("⬇️ Descargar Resultados")
+    
+    # Preparar outputs
+    df_8949 = generate_8949_output(df)
+    csv_8949 = df_8949.to_csv(index=False).encode('utf-8')
+    
+    csv_full = df.to_csv(index=False).encode('utf-8')
+    
+    excel_output = BytesIO()
+    with pd.ExcelWriter(excel_output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Transactions')
+        df_8949.to_excel(writer, index=False, sheet_name='Form_8949')
+    excel_output.seek(0)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.download_button(
+            "📥 Formato 8949 (CSV)",
+            csv_8949,
+            f"{base_filename}_Form8949.csv",
+            "text/csv",
+            key="csv_8949"
+        )
+    with col2:
+        st.download_button(
+            "📊 Excel Completo",
+            excel_output.getvalue(),
+            f"{base_filename}_Transactions.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="xlsx"
+        )
+    with col3:
+        st.download_button(
+            "📄 CSV Completo",
+            csv_full,
+            f"{base_filename}_Complete.csv",
+            "text/csv",
+            key="csv_full"
+        )
+    
+    # Auditoría
+    if not st.session_state.audit_log_df.empty and st.session_state.file_type == 'pdf':
+        st.subheader("🔍 Log de Auditoría")
+        st.dataframe(st.session_state.audit_log_df, use_container_width=True)
         
-        st.subheader("⬇️ Opciones de Descarga de Transacciones")
-        # Crear dataframe 8949 de forma más eficiente
-        df_8949 = df[['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']].copy()
-        df_8949.insert(5, '(1f) Code(s) from instructions', '')
-        df_8949.insert(6, '(1g) Amount of adjustment', '')
+        audit_excel = BytesIO()
+        with pd.ExcelWriter(audit_excel, engine='openpyxl') as writer:
+            st.session_state.audit_log_df.to_excel(writer, index=False)
         
-        csv_8949_output = df_8949.to_csv(index=False).encode('utf-8')
-        
-        # Generar Excel una sola vez
-        excel_output = BytesIO()
-        with pd.ExcelWriter(excel_output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Transactions')
-        excel_output.seek(0)
-        
-        txt_output = df.to_csv(index=False, sep='\t').encode('utf-8')
-        
-        col1, col2, col3 = st.columns(3)
-        with col1: st.download_button("📥 Formato 8949 (.csv)", csv_8949_output, f"{base_filename}_Form8949.csv", "text/csv", key="csv_dl")
-        with col2: st.download_button("📄 Excel (.xlsx)", excel_output.getvalue(), f"{base_filename}_Transactions.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="xlsx_dl")
-        with col3: st.download_button("📝 Texto Plano (.txt)", txt_output, f"{base_filename}_Transactions.txt", "text/plain", key="txt_dl")
-    else:
-        st.warning("No se ensamblaron transacciones válidas.")
+        st.download_button(
+            "📥 Descargar Log de Auditoría",
+            audit_excel.getvalue(),
+            f"{base_filename}_Audit.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="audit_dl"
+        )
 
-    st.subheader("🔎 Auditoría y Avanzadas")
-    col_audit1, col_audit2 = st.columns(2)
-    with col_audit1:
-        if not st.session_state.audit_log_df.empty:
-            audit_log_excel_output = BytesIO()
-            with pd.ExcelWriter(audit_log_excel_output, engine='openpyxl') as writer: st.session_state.audit_log_df.to_excel(writer, index=False, sheet_name='Audit_Log')
-            st.download_button("📥 Descargar Log de Transparencia (Auditoría)", audit_log_excel_output.getvalue(), f"{base_filename}_Audit_Log.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", help="Guarda un registro detallado del escaneo página por página.", key="audit_log_dl")
-    with col_audit2:
-        if not st.session_state.raw_lines_df.empty:
-            reprocessable_log_output = BytesIO()
-            with pd.ExcelWriter(reprocessable_log_output, engine='openpyxl') as writer: st.session_state.raw_lines_df.to_excel(writer, index=False, sheet_name='Reprocessable_Log')
-            st.download_button("⚙️ Descargar A Ecxel y Descar Nuevamente a TAX-8949", reprocessable_log_output.getvalue(), f"{base_filename}_Reprocessable_Log.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", help="Guarda solo las líneas encontradas para un futuro re-ensamblaje.", key="repro_log_dl")
+elif st.session_state.processing_complete and st.session_state.final_df.empty:
+    st.warning("⚠️ No se encontraron transacciones válidas en el archivo.")

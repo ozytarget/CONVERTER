@@ -90,6 +90,10 @@ class UniversalBrokerParser:
             Diccionario con mapeo: {columna_original: columna_estándar}
         """
         df_columns = df.columns.tolist()
+        
+        # Convertir todo a lowercase para búsqueda
+        df_columns_lower = [col.lower().strip() for col in df_columns]
+        
         mapping = {}
         
         # Mapear cada tipo de columna
@@ -103,31 +107,58 @@ class UniversalBrokerParser:
             'Quantity': UniversalBrokerParser.QUANTITY_KEYWORDS,
         }
         
-        found_columns = set()
+        found_indices = set()
         
         for standard_col, keywords in column_types.items():
-            matched_col = UniversalBrokerParser.find_matching_column(
-                [col for col in df_columns if col not in found_columns],
-                keywords
-            )
-            if matched_col:
-                mapping[matched_col] = standard_col
-                found_columns.add(matched_col)
+            for idx, col_lower in enumerate(df_columns_lower):
+                if idx in found_indices:
+                    continue
+                    
+                for keyword in keywords:
+                    # Búsqueda exacta primero
+                    if keyword in col_lower:
+                        mapping[df_columns[idx]] = standard_col
+                        found_indices.add(idx)
+                        break
+                
+                if idx in found_indices:
+                    break
+                
+                # Búsqueda fuzzy si no es exacta
+                for keyword in keywords:
+                    similarity = SequenceMatcher(None, keyword, col_lower).ratio()
+                    if similarity >= 0.6:
+                        mapping[df_columns[idx]] = standard_col
+                        found_indices.add(idx)
+                        break
+                
+                if idx in found_indices:
+                    break
         
         return mapping
     
     @staticmethod
     def clean_numeric_value(value) -> float:
         """Limpia valores numéricos de cualquier formato"""
-        if pd.isna(value):
+        if value is None or pd.isna(value):
             return 0.0
         
         value_str = str(value).strip()
-        # Remover símbolos de moneda, signos de porcentaje, espacios, comas
-        value_str = re.sub(r'[$%,\s]', '', value_str)
+        
+        # Si es vacío o "nan"
+        if value_str.lower() in ['', 'nan', 'none', 'n/a', '-']:
+            return 0.0
+        
+        # Remover símbolos de moneda, signos de porcentaje, espacios, comas, paréntesis
+        value_str = re.sub(r'[\(\)\$%,\s]', '', value_str)
+        
+        # Manejar negativos
+        is_negative = '-' in value_str
+        value_str = value_str.replace('-', '')
         
         try:
-            return float(value_str)
+            result = float(value_str)
+            return -result if is_negative else result
         except ValueError:
             return 0.0
     
@@ -165,19 +196,33 @@ class UniversalBrokerParser:
                 for encoding in ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']:
                     try:
                         file_data.seek(0)
+                        # Intentar leer sin índice primero
                         df = pd.read_csv(file_data, encoding=encoding)
+                        
+                        # Si la primera columna es un índice numérico, removerla
+                        if df.columns[0] in ['', 'Unnamed: 0'] or (df.iloc[:, 0].dtype in ['int64', 'int32'] and 
+                                                                     list(df.iloc[:, 0]) == list(range(len(df)))):
+                            df = df.iloc[:, 1:]
+                        
                         break
                     except:
                         continue
+            
+            # Limpiar nombres de columnas: remover espacios extras, normalizar
+            df.columns = df.columns.str.strip().str.lower()
+            
+            # Remover filas completamente vacías
+            df = df.dropna(how='all')
             
             # Detectar y mapear columnas
             column_mapping = UniversalBrokerParser.detect_and_map_columns(df)
             
             if not column_mapping:
-                raise ValueError("No se pudieron detectar columnas válidas en el archivo")
+                raise ValueError("No se pudieron detectar columnas válidas en el archivo. Verifica que tenga al menos: fechas, montos")
             
-            # Renombrar columnas
-            df = df.rename(columns=column_mapping)
+            # Renombrar columnas (usar los nombres ya en lowercase)
+            rename_dict = {col.lower(): standard for col, standard in column_mapping.items()}
+            df = df.rename(columns=rename_dict)
             
             # Limpiar datos numéricos
             numeric_cols = ['Proceeds', 'Cost Basis', 'Quantity', 'Gain or (loss)']
@@ -207,8 +252,11 @@ class UniversalBrokerParser:
             # Seleccionar solo columnas necesarias
             df = df[required_cols]
             
-            # Remover filas vacías
-            df = df.dropna(how='all')
+            # Remover filas donde Description está vacía
+            df = df[df['Description'].astype(str).str.strip() != '']
+            
+            # Reset index
+            df = df.reset_index(drop=True)
             
             return df
             

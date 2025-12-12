@@ -73,20 +73,29 @@ def process_broker_file(file_data: BytesIO, filename: str):
     try:
         # Primero intentar detección específica de broker conocido
         df, broker_name = None, None
+        warnings = []
         
         try:
             df, broker_name = BrokerDetector.detect_and_parse(file_data, filename)
-            return df, broker_name, None
+            return df, broker_name, None, warnings
         except:
             pass
         
         # Si no funciona, usar parser universal
         file_data.seek(0)
-        df = UniversalBrokerParser.parse(file_data, filename)
-        return df, 'universal', None
+        result = UniversalBrokerParser.parse(file_data, filename)
+        
+        # El parser retorna tupla (df, warnings) o solo df dependiendo de la versión
+        if isinstance(result, tuple):
+            df, warnings = result
+        else:
+            df = result
+            warnings = []
+        
+        return df, 'universal', None, warnings
         
     except Exception as e:
-        return None, None, str(e)
+        return None, None, str(e), []
 
 # --- PROCESAMIENTO DE PDFs ---
 @st.cache_data(show_spinner=False)
@@ -232,11 +241,17 @@ with tab1:
                 
                 with st.spinner("Procesando archivo..."):
                     file_data = BytesIO(file_bytes)
-                    df, broker_name, error = process_broker_file(file_data, filename)
+                    df, broker_name, error, warnings = process_broker_file(file_data, filename)
                     
                     if error:
                         st.error(f"❌ Error procesando archivo: {error}")
                     else:
+                        # Mostrar advertencias si las hay
+                        if warnings:
+                            with st.warning("⚠️ Se detectaron inconsistencias en los datos:", icon="⚠️"):
+                                for warning in warnings:
+                                    st.write(warning)
+                        
                         # Asegurar que el DataFrame tenga todas las columnas necesarias
                         required_columns = ['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']
                         for col in required_columns:

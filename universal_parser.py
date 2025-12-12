@@ -39,7 +39,8 @@ class UniversalBrokerParser:
     GAIN_LOSS_KEYWORDS = [
         'gain', 'loss', 'gain or loss', 'gain/loss', 'gain or (loss)',
         'p&l', 'profit loss', 'return', 'pl', 'ganancia pérdida',
-        'ganancia', 'pérdida', 'total return', 'realized gain', 'realized loss'
+        'ganancia', 'pérdida', 'total return', 'realized gain', 'realized loss',
+        'gain or loss'
     ]
     
     DESCRIPTION_KEYWORDS = [
@@ -236,12 +237,19 @@ class UniversalBrokerParser:
                 if col in df.columns:
                     df[col] = df[col].apply(UniversalBrokerParser.clean_date_value)
             
-            # Asegurar que existe 'Gain or (loss)'
+            # Asegurar que existe 'Gain or (loss)' - usar la columna existente si está disponible
+            # Primero normalizar el nombre de la columna si existe como 'Gain or Loss'
+            if 'Gain or Loss' in df.columns and 'Gain or (loss)' not in df.columns:
+                df = df.rename(columns={'Gain or Loss': 'Gain or (loss)'})
+            
             if 'Gain or (loss)' not in df.columns:
                 if 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
                     df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
                 else:
                     df['Gain or (loss)'] = 0.0
+            else:
+                # Si la columna ya existe, asegurarse de que está limpia
+                df['Gain or (loss)'] = df['Gain or (loss)'].apply(UniversalBrokerParser.clean_numeric_value)
             
             # Asegurar columnas mínimas
             required_cols = ['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']
@@ -258,7 +266,37 @@ class UniversalBrokerParser:
             # Reset index
             df = df.reset_index(drop=True)
             
-            return df
+            # Validar datos sospechosos
+            warnings = UniversalBrokerParser.validate_data(df)
+            
+            return df, warnings
             
         except Exception as e:
             raise ValueError(f"Error procesando archivo: {str(e)}")
+    
+    @staticmethod
+    def validate_data(df: pd.DataFrame) -> List[str]:
+        """
+        Valida los datos y retorna advertencias si encuentra inconsistencias
+        """
+        warnings = []
+        
+        if df.empty:
+            return warnings
+        
+        # Verificar si Gain/Loss = Proceeds - Cost Basis
+        if 'Proceeds' in df.columns and 'Cost Basis' in df.columns and 'Gain or (loss)' in df.columns:
+            calculated = df['Proceeds'] - df['Cost Basis']
+            mismatches = df[abs(df['Gain or (loss)'] - calculated) >= 0.01]
+            
+            if len(mismatches) > 0:
+                warnings.append(f"⚠️ {len(mismatches)} transacciones tienen Gain/Loss inconsistente")
+                for idx, row in mismatches.iterrows():
+                    calc_value = row['Proceeds'] - row['Cost Basis']
+                    warnings.append(
+                        f"  Fila {idx}: {row['Description'][:50]} - "
+                        f"Reportado: {row['Gain or (loss)']:.2f}, "
+                        f"Calculado: {calc_value:.2f}"
+                    )
+        
+        return warnings

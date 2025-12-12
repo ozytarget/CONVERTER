@@ -233,6 +233,64 @@ class TradeStationParser(BrokerParser):
         return df
 
 
+class RobinhoodParser(BrokerParser):
+    """Parser para Robinhood (CSV)"""
+    
+    @staticmethod
+    def parse(file_data: BytesIO, filename: str) -> pd.DataFrame:
+        try:
+            df = pd.read_csv(file_data, encoding='utf-8')
+            
+            # Robinhood tiene columnas específicas
+            column_mapping = {
+                'Date Opened': 'Date Acquired',
+                'Date Closed': 'Date Sold',
+                'Shares': 'Quantity',
+                'Average Price Paid': 'Price',
+                'Proceeds': 'Proceeds',
+                'Amount Invested': 'Cost Basis',
+                'Gain/Loss': 'Gain or (loss)',
+                'Ticker Symbol': 'Description',
+                'Open Date': 'Date Acquired',
+                'Close Date': 'Date Sold',
+                'Quantity': 'Quantity',
+                'Proceeds Amount': 'Proceeds',
+                'Total Cost': 'Cost Basis',
+                'Total Return': 'Gain or (loss)',
+                'Symbol': 'Description',
+            }
+            
+            df = df.rename(columns=column_mapping)
+            df = RobinhoodParser._clean_robinhood_data(df)
+            return df
+        except Exception as e:
+            raise ValueError(f"Error procesando Robinhood: {str(e)}")
+    
+    @staticmethod
+    def _clean_robinhood_data(df: pd.DataFrame) -> pd.DataFrame:
+        """Limpia datos específicos de Robinhood"""
+        # Robinhood puede usar diferentes formatos de fecha
+        date_cols = ['Date Acquired', 'Date Sold']
+        for col in date_cols:
+            if col in df.columns:
+                # Intenta varios formatos
+                df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%m/%d/%Y')
+        
+        # Limpiar valores numéricos
+        numeric_cols = ['Proceeds', 'Cost Basis', 'Gain or (loss)', 'Quantity']
+        for col in numeric_cols:
+            if col in df.columns:
+                # Robinhood puede tener valores con $ y comas
+                df[col] = df[col].astype(str).str.replace('$', '').str.replace(',', '')
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Si falta 'Gain or (loss)', calcular de Proceeds - Cost Basis
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
+        
+        return df
+
+
 class BrokerDetector:
     """Detecta automáticamente el broker basado en características del archivo"""
     
@@ -242,6 +300,7 @@ class BrokerDetector:
         'fidelity': FidelityParser,
         'charles_schwab': CharlesSchwartzParser,
         'tradestation': TradeStationParser,
+        'robinhood': RobinhoodParser,
     }
     
     @staticmethod
@@ -260,6 +319,7 @@ class BrokerDetector:
             'fidelity': ['fidelity', 'fid_'],
             'charles_schwab': ['schwab', 'charles'],
             'tradestation': ['tradestation', 'ts_'],
+            'robinhood': ['robinhood', 'rh_', 'hood'],
         }
         
         for broker_name, keywords in detection_keywords.items():
@@ -284,6 +344,8 @@ class BrokerDetector:
                 return FidelityParser.parse(file_data, filename), 'fidelity'
             elif 'exit date' in columns and 'entry cost' in columns:
                 return TradeStationParser.parse(file_data, filename), 'tradestation'
+            elif 'ticker symbol' in columns or 'date opened' in columns:
+                return RobinhoodParser.parse(file_data, filename), 'robinhood'
             else:
                 return CharlesSchwartzParser.parse(file_data, filename), 'charles_schwab'
         except:

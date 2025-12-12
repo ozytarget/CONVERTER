@@ -29,6 +29,11 @@ La aplicación ahora puede procesar archivos de los siguientes brokers:
 - **Cómo obtener:** Tools → Trade Positions → Export
 - **Columnas esperadas:** Entry Date, Exit Date, Qty, Exit Price, Proceeds, Entry Cost, P&L $, Symbol
 
+### 6. **Robinhood**
+- **Formato:** CSV
+- **Cómo obtener:** Account → History → Download Tax Report o Statements
+- **Columnas esperadas:** Date Opened/Open Date, Date Closed/Close Date, Quantity/Shares, Proceeds, Cost Basis/Amount Invested, Gain/Loss, Ticker Symbol/Symbol
+
 ## 🔄 Cómo Usar
 
 ### Con CSV/Excel

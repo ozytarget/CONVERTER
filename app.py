@@ -171,6 +171,7 @@ with tab1:
     - Fidelity
     - Charles Schwab
     - TradeStation
+    - Robinhood
     """)
     
     uploaded_broker_file = st.file_uploader(

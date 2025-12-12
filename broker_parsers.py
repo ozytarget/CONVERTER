@@ -61,6 +61,10 @@ class InteractiveBrokersParser(BrokerParser):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
+        # Asegurar que existe Gain or (loss)
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
+        
         return df
 
 
@@ -99,8 +103,12 @@ class ThinkorswimParser(BrokerParser):
         numeric_cols = ['Proceeds', 'Cost Basis', 'Gain or (loss)']
         for col in numeric_cols:
             if col in df.columns:
-                df[col] = df[col].str.replace('$', '').str.replace(',', '')
+                df[col] = df[col].astype(str).str.replace('$', '').str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Asegurar que existe Gain or (loss)
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
         
         return df
 
@@ -144,8 +152,12 @@ class FidelityParser(BrokerParser):
         numeric_cols = ['Proceeds', 'Cost Basis', 'Gain or (loss)']
         for col in numeric_cols:
             if col in df.columns:
-                df[col] = df[col].str.replace('$', '').str.replace(',', '')
+                df[col] = df[col].astype(str).str.replace('$', '').str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Asegurar que existe Gain or (loss)
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
         
         return df
 
@@ -186,8 +198,12 @@ class CharlesSchwartzParser(BrokerParser):
         numeric_cols = ['Proceeds', 'Cost Basis', 'Gain or (loss)']
         for col in numeric_cols:
             if col in df.columns:
-                df[col] = df[col].str.replace('$', '').str.replace(',', '')
+                df[col] = df[col].astype(str).str.replace('$', '').str.replace(',', '')
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Asegurar que existe Gain or (loss)
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
         
         return df
 
@@ -229,6 +245,10 @@ class TradeStationParser(BrokerParser):
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # Asegurar que existe Gain or (loss)
+        if 'Gain or (loss)' not in df.columns and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            df['Gain or (loss)'] = df['Proceeds'] - df['Cost Basis']
         
         return df
 

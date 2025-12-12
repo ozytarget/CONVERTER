@@ -145,13 +145,23 @@ def assemble_records(lines_df):
     
     return pd.DataFrame(final_records)
 
-# Función para generar salida estándar 8949
 def generate_8949_output(df):
     """Genera DataFrame con columnas de Formulario 8949"""
     if df.empty:
         return pd.DataFrame()
     
-    df_8949 = df[['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']].copy()
+    # Asegurar que todas las columnas necesarias existen
+    required_cols = ['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']
+    
+    # Verificar que existen, sino agregar con valores por defecto
+    for col in required_cols:
+        if col not in df.columns:
+            if col == 'Gain or (loss)' and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+                df[col] = df['Proceeds'] - df['Cost Basis']
+            else:
+                df[col] = ''
+    
+    df_8949 = df[required_cols].copy()
     df_8949.insert(5, '(1f) Code(s) from instructions', '')
     df_8949.insert(6, '(1g) Amount of adjustment', '')
     return df_8949
@@ -210,6 +220,15 @@ with tab1:
                     if error:
                         st.error(f"❌ Error procesando archivo: {error}")
                     else:
+                        # Asegurar que el DataFrame tenga todas las columnas necesarias
+                        required_columns = ['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']
+                        for col in required_columns:
+                            if col not in df.columns:
+                                if col == 'Gain or (loss)' and 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+                                    df[col] = df['Proceeds'] - df['Cost Basis']
+                                else:
+                                    df[col] = ''
+                        
                         st.session_state.final_df = df
                         st.session_state.broker_detected = broker_name
                         st.session_state.processing_complete = True
@@ -317,10 +336,19 @@ if st.session_state.processing_complete and not st.session_state.final_df.empty:
     with col1:
         st.metric("Transacciones", len(df))
     with col2:
-        total_gain_loss = df['Gain or (loss)'].sum()
+        # Calcular ganancia/pérdida si no existe
+        if 'Gain or (loss)' in df.columns:
+            total_gain_loss = df['Gain or (loss)'].sum()
+        elif 'Proceeds' in df.columns and 'Cost Basis' in df.columns:
+            total_gain_loss = (df['Proceeds'] - df['Cost Basis']).sum()
+        else:
+            total_gain_loss = 0
         st.metric("Ganancia/(Pérdida) Total", f"${total_gain_loss:,.2f}")
     with col3:
-        total_proceeds = df['Proceeds'].sum()
+        if 'Proceeds' in df.columns:
+            total_proceeds = df['Proceeds'].sum()
+        else:
+            total_proceeds = 0
         st.metric("Ingresos Totales", f"${total_proceeds:,.2f}")
     
     # Tabla de transacciones

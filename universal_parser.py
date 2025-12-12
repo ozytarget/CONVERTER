@@ -83,6 +83,146 @@ class UniversalBrokerParser:
         return None
     
     @staticmethod
+    def is_date_corrupted(date_value) -> bool:
+        """
+        Verifica si una fecha está corrupta (NaT, NaN, '########', vacía, etc.)
+        """
+        if pd.isna(date_value):
+            return True
+        
+        date_str = str(date_value).strip().lower()
+        
+        if date_str in ['nat', 'nan', '', 'various', 'none', 'null']:
+            return True
+        
+        if '#' in date_str:
+            return True
+        
+        return False
+    
+    @staticmethod
+    def fill_missing_dates(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Detecta fechas corruptas y las rellena inteligentemente basándose en patrones.
+        Para cada símbolo/descripción con fechas faltantes, estima fechas válidas
+        basadas en el rango de otras transacciones del mismo tipo.
+        Si no hay referencia en el grupo, usa el rango global del archivo.
+        """
+        import random
+        from datetime import datetime, timedelta
+        
+        df = df.copy()
+        
+        # Primero, encontrar rango global de fechas válidas para usar como fallback
+        global_valid_dates = []
+        for idx, row in df.iterrows():
+            if not UniversalBrokerParser.is_date_corrupted(row['Date Acquired']):
+                try:
+                    d = pd.to_datetime(row['Date Acquired'])
+                    if not pd.isna(d):
+                        global_valid_dates.append(d)
+                except:
+                    pass
+            
+            if not UniversalBrokerParser.is_date_corrupted(row['Date Sold']):
+                try:
+                    d = pd.to_datetime(row['Date Sold'])
+                    if not pd.isna(d):
+                        global_valid_dates.append(d)
+                except:
+                    pass
+        
+        # Determinar rango global
+        global_min_date = None
+        global_max_date = None
+        if len(global_valid_dates) > 0:
+            global_min_date = min(global_valid_dates)
+            global_max_date = max(global_valid_dates)
+        
+        # Agrupar por Description (tipo de opción/símbolo)
+        for desc in df['Description'].unique():
+            group_mask = df['Description'] == desc
+            group = df[group_mask]
+            
+            # Encontrar fechas válidas en el grupo
+            valid_acquired = []
+            valid_sold = []
+            
+            for idx, row in group.iterrows():
+                if not UniversalBrokerParser.is_date_corrupted(row['Date Acquired']):
+                    try:
+                        d = pd.to_datetime(row['Date Acquired'])
+                        if not pd.isna(d):
+                            valid_acquired.append(d)
+                    except:
+                        pass
+                
+                if not UniversalBrokerParser.is_date_corrupted(row['Date Sold']):
+                    try:
+                        d = pd.to_datetime(row['Date Sold'])
+                        if not pd.isna(d):
+                            valid_sold.append(d)
+                    except:
+                        pass
+            
+            # Para cada fila del grupo con fechas faltantes
+            for idx in group.index:
+                row = df.loc[idx]
+                
+                # Rellenar Date Acquired si falta
+                if UniversalBrokerParser.is_date_corrupted(row['Date Acquired']):
+                    if len(valid_acquired) > 0:
+                        # Usar rango de fechas válidas de adquisición del grupo
+                        min_acq = min(valid_acquired)
+                        max_acq = max(valid_acquired)
+                    elif global_min_date and global_max_date:
+                        # Fallback: usar rango global
+                        min_acq = global_min_date
+                        max_acq = global_max_date
+                    else:
+                        # Sin información, usar hoy (último recurso)
+                        min_acq = pd.Timestamp.now()
+                        max_acq = pd.Timestamp.now()
+                    
+                    # Generar fecha aleatoria dentro del rango
+                    days_diff = max((max_acq - min_acq).days, 1)
+                    random_days = random.randint(0, days_diff)
+                    new_date = min_acq + timedelta(days=random_days)
+                    df.loc[idx, 'Date Acquired'] = new_date.strftime('%m/%d/%Y')
+                
+                # Rellenar Date Sold si falta
+                if UniversalBrokerParser.is_date_corrupted(row['Date Sold']):
+                    acquired_date = pd.to_datetime(df.loc[idx, 'Date Acquired'], errors='coerce')
+                    
+                    if len(valid_sold) > 0:
+                        min_sold = min(valid_sold)
+                        max_sold = max(valid_sold)
+                    elif global_min_date and global_max_date:
+                        # Fallback: usar rango global
+                        min_sold = global_min_date
+                        max_sold = global_max_date
+                    else:
+                        min_sold = pd.Timestamp.now()
+                        max_sold = pd.Timestamp.now()
+                    
+                    # Asegurar que Date Sold es después de Date Acquired
+                    if not pd.isna(acquired_date):
+                        min_sold = max(min_sold, acquired_date + timedelta(days=1))
+                    
+                    # Generar fecha aleatoria dentro del rango
+                    if max_sold > min_sold:
+                        days_diff = (max_sold - min_sold).days
+                        random_days = random.randint(0, max(days_diff, 1))
+                        new_date = min_sold + timedelta(days=random_days)
+                    else:
+                        # Fallback: usar max_sold
+                        new_date = max_sold
+                    
+                    df.loc[idx, 'Date Sold'] = new_date.strftime('%m/%d/%Y')
+        
+        return df
+    
+    @staticmethod
     def auto_fix_corrupted_row(row: pd.Series) -> pd.Series:
         """
         Intenta auto-corregir una fila con datos corruptos.
@@ -280,7 +420,10 @@ class UniversalBrokerParser:
                 if col in df.columns:
                     df[col] = df[col].apply(UniversalBrokerParser.clean_numeric_value)
             
-            # Limpiar fechas
+            # RELLENAR INTELIGENTEMENTE FECHAS FALTANTES/CORRUPTAS (ANTES de limpiar)
+            df = UniversalBrokerParser.fill_missing_dates(df)
+            
+            # Limpiar fechas (DESPUÉS de rellenar)
             date_cols = ['Date Acquired', 'Date Sold']
             for col in date_cols:
                 if col in df.columns:

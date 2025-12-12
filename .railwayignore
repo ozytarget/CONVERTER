@@ -1,0 +1,13 @@
+.git
+.gitignore
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.env.example
+README.md
+PERFORMANCE_IMPROVEMENTS.md
+BROKERS_GUIDE.md
+*.md
+.streamlit/secrets.toml
+railway.json

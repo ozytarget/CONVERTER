@@ -19,11 +19,14 @@ textColor = "#31333F"
 font = "sans serif"
 
 [server]
-# Optimizaciones de servidor
+# Optimizaciones de servidor y Railway
 maxUploadSize = 500
 enableXsrfProtection = true
 enableCORS = false
+headless = true
+runOnSave = false
 port = 8501
 
 [deprecation]
 pyarrowLegacyStreaming = false
+

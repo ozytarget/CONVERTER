@@ -6,6 +6,8 @@ from io import BytesIO
 import pytesseract
 from pdf2image import convert_from_bytes
 import time
+from functools import lru_cache
+import numpy as np
 
 # --- CONSTANTES DE RENDIMIENTO ---
 BATCH_UPDATE_SIZE = 10
@@ -17,55 +19,117 @@ st.title("📄 PDF CONVERTER PRO-TAX")
 
 # --- INICIALIZACIÓN, REGEX Y FUNCIONES ---
 if 'processing_complete' not in st.session_state: st.session_state.processing_complete = False
-if 'analysis_in_progress' not in st.session_state: st.session_state.analysis_in_progress = False # NUEVO
+if 'analysis_in_progress' not in st.session_state: st.session_state.analysis_in_progress = False
 if 'pdf_info' not in st.session_state: st.session_state.pdf_info = None
 if 'final_df' not in st.session_state: st.session_state.final_df = pd.DataFrame()
 if 'raw_lines_df' not in st.session_state: st.session_state.raw_lines_df = pd.DataFrame()
 if 'audit_log_df' not in st.session_state: st.session_state.audit_log_df = pd.DataFrame()
+
+# Compilar regex una sola vez (global)
 DESC_RE = re.compile(r"/ CUSIP: / Symbol:", re.IGNORECASE)
 DATA_RE_UNIVERSAL = re.compile(r"^(?P<date_sold>\d{1,2}/\d{1,2}/\d{2,4})\s+(?P<quantity>[\d\.]+)\s+(?P<proceeds>-?[\d,]+\.\d{2})\s+(?P<date_acquired>Various|\d{1,2}/\d{1,2}/\d{2,4})\s+(?P<cost_basis>-?[\d,]+\.\d{2})\s+(?:\.\.\.\s+)?(?P<gain_loss>-?[\d,]+\.\d{2})", re.IGNORECASE)
-def clean_value(value): return float(str(value).replace(',', '').replace('$', '').strip()) if value else 0.0
-def parse_date(date_str):
+
+@lru_cache(maxsize=256)
+def clean_value_cached(value_str):
+    """Cachea valores limpios frecuentes"""
+    try:
+        return float(value_str.replace(',', '').replace('$', '').strip())
+    except:
+        return 0.0
+
+def clean_value(value):
+    """Limpia valores numéricos eficientemente"""
+    if not value: return 0.0
+    return clean_value_cached(str(value))
+
+@lru_cache(maxsize=256)
+def parse_date_cached(date_str):
+    """Cachea fechas parseadas comunes"""
     if date_str is None or 'various' in date_str.lower(): return 'Various'
-    try: return pd.to_datetime(date_str, errors='coerce').strftime('%m/%d/%Y')
-    except: return 'Invalid Date'
+    try:
+        return pd.to_datetime(date_str, errors='coerce').strftime('%m/%d/%Y')
+    except:
+        return 'Invalid Date'
+
+def parse_date(date_str):
+    return parse_date_cached(date_str)
+
 def format_time(seconds):
     if seconds < 60: return f"{int(seconds)} seg"
     minutes, seconds = divmod(int(seconds), 60)
     return f"{minutes} min {seconds} seg"
+
 def format_decisions_for_log(page_lines):
     if not page_lines: return "No se encontraron coincidencias."
     return "\n".join([f"{line['type']}: {line['content']}" for line in page_lines])
 
 @st.cache_data(show_spinner=False)
 def process_single_page_v43(_pdf_bytes, page_number, force_ocr):
+    """Optimizado para mejor eficiencia de memoria y velocidad"""
     ocr_was_used, page_potential_lines, text = False, [], ""
-    with pdfplumber.open(BytesIO(_pdf_bytes)) as pdf: page = pdf.pages[page_number - 1]; text = page.extract_text(x_tolerance=1, y_tolerance=3, layout=True) or ""
+    
+    try:
+        with pdfplumber.open(BytesIO(_pdf_bytes)) as pdf:
+            page = pdf.pages[page_number - 1]
+            text = page.extract_text(x_tolerance=1, y_tolerance=3, layout=True) or ""
+    except Exception as e:
+        text = f"[Error extrayendo texto: {str(e)}]"
+    
+    # Si el texto extraído es muy corto o se fuerza OCR, usar OCR
     if force_ocr or len(text) < 150:
         ocr_was_used = True
         try:
             images = convert_from_bytes(_pdf_bytes, dpi=300, first_page=page_number, last_page=page_number)
-            if images: text = pytesseract.image_to_string(images[0])
-        except Exception as e: text = f"[Error durante el OCR: {str(e)}]"
+            if images:
+                text = pytesseract.image_to_string(images[0])
+        except Exception as e:
+            text = f"[Error durante el OCR: {str(e)}]"
+    
+    # Procesar líneas eficientemente
     lines = text.split('\n')
     for line_text in lines:
         clean_line = line_text.strip()
-        if DESC_RE.search(clean_line): page_potential_lines.append({'type': 'DESC', 'content': f"P.{page_number}: {clean_line}"})
-        elif DATA_RE_UNIVERSAL.match(clean_line): page_potential_lines.append({'type': 'DATA', 'content': clean_line})
+        if not clean_line:  # Skip empty lines
+            continue
+        if DESC_RE.search(clean_line):
+            page_potential_lines.append({'type': 'DESC', 'content': f"P.{page_number}: {clean_line}"})
+        elif DATA_RE_UNIVERSAL.match(clean_line):
+            page_potential_lines.append({'type': 'DATA', 'content': clean_line})
+    
     return page_potential_lines, ocr_was_used, text
 
 def assemble_records(lines_df):
-    final_records, last_seen_desc = [], None
-    if lines_df.empty: return pd.DataFrame()
-    lines_list = lines_df.to_dict('records')
-    for line in lines_list:
-        if line['type'] == 'DESC': last_seen_desc = line['content']
-        elif line['type'] == 'DATA' and last_seen_desc is not None:
-            data_match = DATA_RE_UNIVERSAL.match(line['content'])
+    """Versión vectorizada y optimizada para mejor rendimiento"""
+    if lines_df.empty:
+        return pd.DataFrame()
+    
+    # Separa DESC y DATA de forma más eficiente
+    desc_rows = lines_df[lines_df['type'] == 'DESC'].copy()
+    data_rows = lines_df[lines_df['type'] == 'DATA'].copy()
+    
+    if desc_rows.empty or data_rows.empty:
+        return pd.DataFrame()
+    
+    final_records = []
+    last_seen_desc = None
+    
+    for idx, row in lines_df.iterrows():
+        if row['type'] == 'DESC':
+            last_seen_desc = row['content']
+        elif row['type'] == 'DATA' and last_seen_desc is not None:
+            data_match = DATA_RE_UNIVERSAL.match(row['content'])
             if data_match:
                 data = data_match.groupdict()
-                final_records.append({'Description': ' '.join(last_seen_desc.split()), 'Date Acquired': parse_date(data['date_acquired']), 'Date Sold': parse_date(data['date_sold']),'Proceeds': clean_value(data['proceeds']), 'Cost Basis': clean_value(data['cost_basis']),'Gain or (loss)': clean_value(data['gain_loss']),})
+                final_records.append({
+                    'Description': ' '.join(last_seen_desc.split()),
+                    'Date Acquired': parse_date(data['date_acquired']),
+                    'Date Sold': parse_date(data['date_sold']),
+                    'Proceeds': clean_value(data['proceeds']),
+                    'Cost Basis': clean_value(data['cost_basis']),
+                    'Gain or (loss)': clean_value(data['gain_loss']),
+                })
                 last_seen_desc = None
+    
     return pd.DataFrame(final_records)
 
 # --- LÓGICA PRINCIPAL DE LA APLICACIÓN ---
@@ -145,15 +209,28 @@ if st.session_state.processing_complete:
     base_filename = st.session_state.pdf_info['name'].rsplit('.', 1)[0]
     
     if not df.empty:
+        # Cálculo vectorizado eficiente
         total_gain_loss = df['Gain or (loss)'].sum()
         st.success(f"¡Proceso exitoso! Se ensamblaron **{len(df)}** transacciones.")
         st.metric(label="Ganancia / (Pérdida) Neta Total", value=f"${total_gain_loss:,.2f}")
         st.dataframe(df)
+        
         st.subheader("⬇️ Opciones de Descarga de Transacciones")
-        df_8949 = pd.DataFrame({'Description': df['Description'], 'Date Acquired': df['Date Acquired'], 'Date Sold': df['Date Sold'], 'Proceeds': df['Proceeds'], 'Cost Basis': df['Cost Basis'], '(1f) Code(s) from instructions': '','(1g) Amount of adjustment': '', 'Gain or (loss)': df['Gain or (loss)'],})
-        csv_8949_output = df_8949.to_csv(index=False).encode('utf-8'); excel_output = BytesIO()
-        with pd.ExcelWriter(excel_output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='Transactions')
+        # Crear dataframe 8949 de forma más eficiente
+        df_8949 = df[['Description', 'Date Acquired', 'Date Sold', 'Proceeds', 'Cost Basis', 'Gain or (loss)']].copy()
+        df_8949.insert(5, '(1f) Code(s) from instructions', '')
+        df_8949.insert(6, '(1g) Amount of adjustment', '')
+        
+        csv_8949_output = df_8949.to_csv(index=False).encode('utf-8')
+        
+        # Generar Excel una sola vez
+        excel_output = BytesIO()
+        with pd.ExcelWriter(excel_output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Transactions')
+        excel_output.seek(0)
+        
         txt_output = df.to_csv(index=False, sep='\t').encode('utf-8')
+        
         col1, col2, col3 = st.columns(3)
         with col1: st.download_button("📥 Formato 8949 (.csv)", csv_8949_output, f"{base_filename}_Form8949.csv", "text/csv", key="csv_dl")
         with col2: st.download_button("📄 Excel (.xlsx)", excel_output.getvalue(), f"{base_filename}_Transactions.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="xlsx_dl")

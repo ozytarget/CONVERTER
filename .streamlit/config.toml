@@ -1,0 +1,29 @@
+[client]
+# Optimizaciones de cliente
+showErrorDetails = false
+toolbarMode = "viewer"
+
+[logger]
+# Reduce logs innecesarios
+level = "warning"
+
+[cache]
+# Optimizar caché
+maxMegabytes = 200
+
+[theme]
+primaryColor = "#2E86AB"
+backgroundColor = "#F0F2F6"
+secondaryBackgroundColor = "#E8F1F5"
+textColor = "#31333F"
+font = "sans serif"
+
+[server]
+# Optimizaciones de servidor
+maxUploadSize = 500
+enableXsrfProtection = true
+enableCORS = false
+port = 8501
+
+[deprecation]
+pyarrowLegacyStreaming = false
